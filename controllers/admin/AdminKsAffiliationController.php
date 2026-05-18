@@ -68,6 +68,19 @@ class AdminKsAffiliationController extends ModuleAdminController
                 'class'   => 'fixed-width-sm',
                 'orderby' => false,
             ],
+            'cookie_lifetime_days' => [
+                'title' => $this->l('Cookie lifespan (days)'),
+                'align' => 'center',
+                'class' => 'fixed-width-sm',
+                'type'  => 'text',
+            ],
+            'payout_percentage' => [
+                'title'  => $this->l('Payout %'),
+                'align'  => 'center',
+                'class'  => 'fixed-width-sm',
+                'suffix' => '%',
+                'type'   => 'decimal',
+            ],
             'date_add' => [
                 'title' => $this->l('Date created'),
                 'type'  => 'datetime',
@@ -173,6 +186,24 @@ class AdminKsAffiliationController extends ModuleAdminController
                     'hint'     => $this->l('Internal label to identify this link.'),
                 ],
                 [
+                    'type'      => 'text',
+                    'label'     => $this->l('Cookie lifespan (days)'),
+                    'name'      => 'cookie_lifetime_days',
+                    'required'  => true,
+                    'class'     => 'fixed-width-sm',
+                    'suffix'    => $this->l('days'),
+                    'hint'      => $this->l('How long the tracking cookie persists after a click. Must be a positive integer.'),
+                ],
+                [
+                    'type'     => 'text',
+                    'label'    => $this->l('Payout percentage'),
+                    'name'     => 'payout_percentage',
+                    'required' => false,
+                    'class'    => 'fixed-width-sm',
+                    'suffix'   => '%',
+                    'hint'     => $this->l('Optional. Affiliate payout as a percentage of the order amount (excluding shipping). Example: 10 = 10%. Leave empty to hide payout totals.'),
+                ],
+                [
                     'type'   => 'switch',
                     'label'  => $this->l('Active'),
                     'name'   => 'active',
@@ -196,9 +227,11 @@ class AdminKsAffiliationController extends ModuleAdminController
         }
 
         $this->fields_value = [
-            'description'   => $row['description'] ?? '',
-            'active'        => isset($row['active']) ? (int) $row['active'] : 1,
-            'token_display' => $row['token'] ?? '',
+            'description'          => $row['description'] ?? '',
+            'cookie_lifetime_days' => isset($row['cookie_lifetime_days']) ? (int) $row['cookie_lifetime_days'] : 30,
+            'payout_percentage'    => isset($row['payout_percentage']) ? (float) $row['payout_percentage'] : 0,
+            'active'               => isset($row['active']) ? (int) $row['active'] : 1,
+            'token_display'        => $row['token'] ?? '',
         ];
 
         if (!empty($row['token'])) {
@@ -273,6 +306,7 @@ class AdminKsAffiliationController extends ModuleAdminController
         $id          = (int) Tools::getValue('id_ks_affiliation_link');
         $description = trim((string) Tools::getValue('description'));
         $active      = (int) Tools::getValue('active') === 1 ? 1 : 0;
+        $lifetimeRaw = trim((string) Tools::getValue('cookie_lifetime_days'));
 
         if ($description === '') {
             $this->errors[] = $this->l('Description is required.');
@@ -286,15 +320,49 @@ class AdminKsAffiliationController extends ModuleAdminController
             return;
         }
 
+        if ($lifetimeRaw === '' || !ctype_digit($lifetimeRaw)) {
+            $this->errors[] = $this->l('Cookie lifespan is required and must be a positive integer.');
+
+            return;
+        }
+
+        $lifetime = (int) $lifetimeRaw;
+        if ($lifetime <= 0 || $lifetime > 3650) {
+            $this->errors[] = $this->l('Cookie lifespan must be between 1 and 3650 days.');
+
+            return;
+        }
+
+        $payoutRaw = trim((string) Tools::getValue('payout_percentage'));
+        $payoutRaw = str_replace(',', '.', $payoutRaw);
+        if ($payoutRaw === '') {
+            $payout = 0.0;
+        } else {
+            if (!is_numeric($payoutRaw)) {
+                $this->errors[] = $this->l('Payout percentage must be numeric.');
+
+                return;
+            }
+
+            $payout = round((float) $payoutRaw, 2);
+            if ($payout < 0 || $payout > 100) {
+                $this->errors[] = $this->l('Payout percentage must be between 0 and 100.');
+
+                return;
+            }
+        }
+
         $now = date('Y-m-d H:i:s');
 
         if ($id > 0) {
             $ok = Db::getInstance()->update(
                 bqSQL($this->table),
                 [
-                    'description' => pSQL($description),
-                    'active'      => $active,
-                    'date_upd'    => $now,
+                    'description'          => pSQL($description),
+                    'cookie_lifetime_days' => $lifetime,
+                    'payout_percentage'    => (float) $payout,
+                    'active'               => $active,
+                    'date_upd'             => $now,
                 ],
                 '`id_ks_affiliation_link` = ' . $id
             );
@@ -320,12 +388,14 @@ class AdminKsAffiliationController extends ModuleAdminController
         }
 
         $ok = Db::getInstance()->insert($this->table, [
-            'token'       => pSQL($newToken),
-            'description' => pSQL($description),
-            'active'      => $active,
-            'deleted'     => 0,
-            'date_add'    => $now,
-            'date_upd'    => $now,
+            'token'                => pSQL($newToken),
+            'description'          => pSQL($description),
+            'cookie_lifetime_days' => $lifetime,
+            'payout_percentage'    => (float) $payout,
+            'active'               => $active,
+            'deleted'              => 0,
+            'date_add'             => $now,
+            'date_upd'             => $now,
         ]);
 
         if (!$ok) {
@@ -383,39 +453,105 @@ class AdminKsAffiliationController extends ModuleAdminController
         Tools::redirectAdmin(self::$currentIndex . '&conf=5&token=' . $this->token);
     }
 
+    private function computeOrderStatus(int $id_order, int $completedStateId, int $returnDays): array
+    {
+        $hasReturn = (int) Db::getInstance()->getValue(
+            'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'order_return`
+             WHERE `id_order` = ' . $id_order
+        );
+
+        if ($hasReturn > 0) {
+            return [
+                'label' => $this->l('Returned'),
+                'color' => '#d9534f',
+            ];
+        }
+
+        if ($completedStateId > 0) {
+            $completedDate = Db::getInstance()->getValue(
+                'SELECT MIN(`date_add`) FROM `' . _DB_PREFIX_ . 'order_history`
+                 WHERE `id_order` = ' . $id_order . '
+                   AND `id_order_state` = ' . $completedStateId
+            );
+
+            if (!empty($completedDate)) {
+                $daysSince = (int) floor((time() - strtotime((string) $completedDate)) / 86400);
+                if ($returnDays > 0 && $daysSince >= $returnDays) {
+                    return [
+                        'label' => $this->l('Completed'),
+                        'color' => '#5cb85c',
+                    ];
+                }
+            }
+        }
+
+        return [
+            'label' => $this->l('Awaiting'),
+            'color' => '#999999',
+        ];
+    }
+
     private function renderOrdersView(int $id_link): string
     {
-        $description = (string) Db::getInstance()->getValue(
-            'SELECT `description` FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
+        $link = Db::getInstance()->getRow(
+            'SELECT `description`, `payout_percentage`
+             FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `id_ks_affiliation_link` = ' . $id_link
         );
 
+        $description = isset($link['description']) ? (string) $link['description'] : '';
+        $payoutPct   = isset($link['payout_percentage']) ? (float) $link['payout_percentage'] : 0.0;
+
         $rows = Db::getInstance()->executeS(
-            'SELECT o.`id_order`, o.`reference`, o.`total_paid`, o.`date_add`
+            'SELECT o.`id_order`, o.`reference`, o.`total_paid`, o.`total_products_wt`, o.`date_add`
              FROM `' . _DB_PREFIX_ . 'ks_affiliation_order` kao
              INNER JOIN `' . _DB_PREFIX_ . 'orders` o ON o.`id_order` = kao.`id_order`
              WHERE kao.`id_ks_affiliation_link` = ' . $id_link . '
              ORDER BY o.`date_add` DESC'
         );
 
-        $orders = [];
+        $completedStateId = (int) Configuration::get('KS_AFFILIATION_COMPLETED_STATE');
+        $returnDays       = (int) Configuration::get('PS_ORDER_RETURN_NB_DAYS');
+
+        $orders          = [];
+        $orderAmountSum  = 0.0;
         foreach ((array) $rows as $r) {
+            $id_order = (int) $r['id_order'];
+            $status   = $this->computeOrderStatus($id_order, $completedStateId, $returnDays);
+
+            $orderAmountSum += (float) $r['total_products_wt'];
+
             $orders[] = [
-                'id_order'   => (int) $r['id_order'],
-                'reference'  => (string) $r['reference'],
-                'total_paid' => Tools::displayPrice((float) $r['total_paid']),
-                'date_add'   => (string) $r['date_add'],
-                'order_url'  => $this->context->link->getAdminLink('AdminOrders')
-                    . '&id_order=' . (int) $r['id_order'] . '&vieworder',
+                'id_order'     => $id_order,
+                'reference'    => (string) $r['reference'],
+                'total_paid'   => Tools::displayPrice((float) $r['total_paid']),
+                'date_add'     => (string) $r['date_add'],
+                'order_url'    => $this->context->link->getAdminLink(
+                    'AdminOrders',
+                    true,
+                    ['route' => 'admin_orders_view', 'orderId' => $id_order]
+                ),
+                'status_label' => $status['label'],
+                'status_color' => $status['color'],
             ];
         }
 
+        $payoutTotal = round($orderAmountSum * ($payoutPct / 100), 2);
+
         $back_url = self::$currentIndex . '&token=' . $this->token;
 
+        $hasPayout = $payoutPct > 0;
+
         $this->context->smarty->assign([
-            'link_description' => $description,
-            'orders'           => $orders,
-            'back_url'         => $back_url,
+            'link_description'  => $description,
+            'orders'            => $orders,
+            'back_url'          => $back_url,
+            'has_payout'        => $hasPayout,
+            'payout_percentage' => $hasPayout
+                ? rtrim(rtrim(number_format($payoutPct, 2, '.', ''), '0'), '.') . '%'
+                : '',
+            'total_orders'      => Tools::displayPrice($orderAmountSum),
+            'total_payout'      => $hasPayout ? Tools::displayPrice($payoutTotal) : '',
         ]);
 
         return $this->context->smarty->fetch(

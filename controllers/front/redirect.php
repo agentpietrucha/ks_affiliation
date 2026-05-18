@@ -29,27 +29,30 @@ class Ks_affiliationRedirectModuleFrontController extends ModuleFrontController
             return;
         }
 
-        $id_link = (int) Db::getInstance()->getValue(
-            'SELECT `id_ks_affiliation_link` FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
+        $row = Db::getInstance()->getRow(
+            'SELECT `id_ks_affiliation_link`, `cookie_lifetime_days`
+             FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `token` = \'' . pSQL($token) . '\'
                AND `active` = 1
                AND `deleted` = 0'
         );
 
-        if ($id_link === 0) {
+        if (!is_array($row) || (int) $row['id_ks_affiliation_link'] === 0) {
             Tools::redirect($homepage);
 
             return;
         }
 
-        $this->setAffiliateCookie($token);
+        $this->setAffiliateCookie($token, (int) $row['cookie_lifetime_days']);
 
         Tools::redirect($homepage);
     }
 
-    private function setAffiliateCookie(string $token): void
+    private function setAffiliateCookie(string $token, int $days): void
     {
-        $days     = (int) Configuration::get('KS_AFFILIATION_COOKIE_LIFETIME');
+        if ($days <= 0) {
+            $days = (int) Configuration::get('KS_AFFILIATION_COOKIE_LIFETIME');
+        }
         if ($days <= 0) {
             $days = 30;
         }

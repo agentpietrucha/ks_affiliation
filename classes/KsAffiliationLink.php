@@ -28,6 +28,12 @@ class KsAffiliationLink extends ObjectModel
     public $description;
 
     /** @var int */
+    public $cookie_lifetime_days = 30;
+
+    /** @var float */
+    public $payout_percentage = 0.0;
+
+    /** @var int */
     public $active = 1;
 
     /** @var int */
@@ -44,8 +50,10 @@ class KsAffiliationLink extends ObjectModel
         'primary' => 'id_ks_affiliation_link',
         'fields'  => [
             'token'       => ['type' => self::TYPE_STRING, 'validate' => 'isString', 'size' => 12, 'required' => true],
-            'description' => ['type' => self::TYPE_STRING, 'validate' => 'isCleanHtml', 'size' => 255],
-            'active'      => ['type' => self::TYPE_BOOL,   'validate' => 'isBool'],
+            'description'          => ['type' => self::TYPE_STRING, 'validate' => 'isCleanHtml', 'size' => 255],
+            'cookie_lifetime_days' => ['type' => self::TYPE_INT,    'validate' => 'isUnsignedInt', 'required' => true],
+            'payout_percentage'    => ['type' => self::TYPE_FLOAT,  'validate' => 'isFloat',       'required' => true],
+            'active'               => ['type' => self::TYPE_BOOL,   'validate' => 'isBool'],
             'deleted'     => ['type' => self::TYPE_BOOL,   'validate' => 'isBool'],
             'date_add'    => ['type' => self::TYPE_DATE,   'validate' => 'isDate'],
             'date_upd'    => ['type' => self::TYPE_DATE,   'validate' => 'isDate'],

@@ -28,7 +28,7 @@ class Ks_affiliation extends Module
     {
         $this->name                   = 'ks_affiliation';
         $this->tab                    = 'administration';
-        $this->version                = '1.0.0';
+        $this->version                = '1.0.2';
         $this->author                 = 'KS Development';
         $this->need_instance          = 0;
         $this->bootstrap              = true;
@@ -49,7 +49,8 @@ class Ks_affiliation extends Module
             && $this->registerHook('actionDispatcher')
             && $this->registerHook('displayHeader')
             && $this->registerHook('displayBackOfficeHeader')
-            && Configuration::updateValue('KS_AFFILIATION_COOKIE_LIFETIME', 30);
+            && Configuration::updateValue('KS_AFFILIATION_COOKIE_LIFETIME', 30)
+            && Configuration::updateValue('KS_AFFILIATION_COMPLETED_STATE', 0);
     }
 
     public function uninstall(): bool
@@ -57,7 +58,86 @@ class Ks_affiliation extends Module
         return parent::uninstall()
             && $this->uninstallTab()
             && $this->uninstallDb()
-            && Configuration::deleteByName('KS_AFFILIATION_COOKIE_LIFETIME');
+            && Configuration::deleteByName('KS_AFFILIATION_COOKIE_LIFETIME')
+            && Configuration::deleteByName('KS_AFFILIATION_COMPLETED_STATE');
+    }
+
+    public function getContent(): string
+    {
+        $output = '';
+
+        if (Tools::isSubmit('submitKsAffiliationConfig')) {
+            if (Tools::getValue('token') !== Tools::getAdminTokenLite('AdminModules')) {
+                $output .= $this->displayError($this->l('Invalid security token.'));
+            } else {
+                $state = (int) Tools::getValue('KS_AFFILIATION_COMPLETED_STATE');
+                if ($state <= 0) {
+                    $output .= $this->displayError($this->l('Please select an order status.'));
+                } else {
+                    Configuration::updateValue('KS_AFFILIATION_COMPLETED_STATE', $state);
+                    $output .= $this->displayConfirmation($this->l('Settings saved.'));
+                }
+            }
+        }
+
+        return $output . $this->renderConfigForm();
+    }
+
+    private function renderConfigForm(): string
+    {
+        $states  = OrderState::getOrderStates((int) $this->context->language->id);
+        $options = [];
+        foreach ((array) $states as $state) {
+            $options[] = [
+                'id_option' => (int) $state['id_order_state'],
+                'name'      => (string) $state['name'],
+            ];
+        }
+
+        $returnDays = (int) Configuration::get('PS_ORDER_RETURN_NB_DAYS');
+
+        $fields_form = [[
+            'form' => [
+                'legend' => [
+                    'title' => $this->l('KS Affiliation settings'),
+                    'icon'  => 'icon-cogs',
+                ],
+                'description' => sprintf(
+                    $this->l('Merchandise Returns time limit (from Customer Service): %d days. Orders that have been in the "Order completed" status for at least this many days are shown as "Completed".'),
+                    $returnDays
+                ),
+                'input' => [
+                    [
+                        'type'     => 'select',
+                        'label'    => $this->l('Order completed status'),
+                        'name'     => 'KS_AFFILIATION_COMPLETED_STATE',
+                        'required' => true,
+                        'hint'     => $this->l('Pick the order status that represents a finalized, paid, shipped order.'),
+                        'options'  => [
+                            'query' => $options,
+                            'id'    => 'id_option',
+                            'name'  => 'name',
+                        ],
+                    ],
+                ],
+                'submit' => ['title' => $this->l('Save')],
+            ],
+        ]];
+
+        $helper                  = new HelperForm();
+        $helper->module          = $this;
+        $helper->name_controller = $this->name;
+        $helper->token           = Tools::getAdminTokenLite('AdminModules');
+        $helper->currentIndex    = AdminController::$currentIndex . '&configure=' . $this->name;
+        $helper->default_form_language    = (int) Configuration::get('PS_LANG_DEFAULT');
+        $helper->allow_employee_form_lang = (int) Configuration::get('PS_LANG_DEFAULT');
+        $helper->title           = $this->displayName;
+        $helper->submit_action   = 'submitKsAffiliationConfig';
+        $helper->fields_value    = [
+            'KS_AFFILIATION_COMPLETED_STATE' => (int) Configuration::get('KS_AFFILIATION_COMPLETED_STATE'),
+        ];
+
+        return $helper->generateForm($fields_form);
     }
 
     private function installDb(): bool
@@ -66,6 +146,8 @@ class Ks_affiliation extends Module
             `id_ks_affiliation_link` INT(11) NOT NULL AUTO_INCREMENT,
             `token`                  VARCHAR(12) NOT NULL,
             `description`            VARCHAR(255) NOT NULL DEFAULT \'\',
+            `cookie_lifetime_days`   INT(11) UNSIGNED NOT NULL DEFAULT 30,
+            `payout_percentage`      DECIMAL(5,2) NOT NULL DEFAULT 0.00,
             `active`                 TINYINT(1) UNSIGNED NOT NULL DEFAULT 1,
             `deleted`                TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
             `date_add`               DATETIME NOT NULL,
@@ -188,7 +270,7 @@ class Ks_affiliation extends Module
     public function hookActionDispatcher(array $params): void
     {
         if (isset($params['controller_type'])
-            && (int) $params['controller_type'] !== Controller::INST_FC
+            && (int) $params['controller_type'] !== Dispatcher::FC_FRONT
         ) {
             return;
         }
@@ -205,18 +287,22 @@ class Ks_affiliation extends Module
             return;
         }
 
-        $id_link = (int) Db::getInstance()->getValue(
-            'SELECT `id_ks_affiliation_link` FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
+        $row = Db::getInstance()->getRow(
+            'SELECT `id_ks_affiliation_link`, `cookie_lifetime_days`
+             FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `token` = \'' . pSQL($token) . '\'
                AND `active` = 1
                AND `deleted` = 0'
         );
 
-        if ($id_link === 0) {
+        if (!is_array($row) || (int) $row['id_ks_affiliation_link'] === 0) {
             return;
         }
 
-        $days = (int) Configuration::get('KS_AFFILIATION_COOKIE_LIFETIME');
+        $days = (int) $row['cookie_lifetime_days'];
+        if ($days <= 0) {
+            $days = (int) Configuration::get('KS_AFFILIATION_COOKIE_LIFETIME');
+        }
         if ($days <= 0) {
             $days = 30;
         }
