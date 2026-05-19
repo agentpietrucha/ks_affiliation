@@ -285,6 +285,34 @@ class AdminKsAffiliationController extends ModuleAdminController
                 'name'     => 'token_display',
                 'desc'     => $row['token'],
             ];
+        } else {
+            $tokenHint = $this->l('Optional. Letters and digits only, 3–64 characters. Leave empty to auto-generate.');
+            $generateLabel = $this->l('Generate');
+            $tokenInputHtml = '<div class="input-group" style="max-width:420px;">'
+                . '<input type="text" class="form-control" name="custom_token" value="'
+                . htmlspecialchars((string) Tools::getValue('custom_token', ''), ENT_QUOTES, 'UTF-8')
+                . '" maxlength="64" pattern="[A-Za-z0-9]{3,64}" autocomplete="off">'
+                . '<span class="input-group-btn">'
+                . '<button type="button" class="btn btn-default" id="ks-generate-token">'
+                . '<i class="icon-refresh"></i> ' . htmlspecialchars($generateLabel, ENT_QUOTES, 'UTF-8')
+                . '</button>'
+                . '</span>'
+                . '</div>'
+                . '<p class="help-block">' . htmlspecialchars($tokenHint, ENT_QUOTES, 'UTF-8') . '</p>'
+                . '<script>(function(){var b=document.getElementById("ks-generate-token");if(!b)return;'
+                . 'b.addEventListener("click",function(){var c="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";'
+                . 'var n=12,s="";if(window.crypto&&window.crypto.getRandomValues){var a=new Uint32Array(n);'
+                . 'window.crypto.getRandomValues(a);for(var i=0;i<n;i++)s+=c.charAt(a[i]%c.length);}'
+                . 'else{for(var j=0;j<n;j++)s+=c.charAt(Math.floor(Math.random()*c.length));}'
+                . 'var inp=b.parentNode.parentNode.querySelector(\'input[name="custom_token"]\');if(inp)inp.value=s;});'
+                . '}());</script>';
+
+            $this->fields_form['input'][] = [
+                'type'  => 'free',
+                'label' => $this->l('Affiliate code'),
+                'name'  => 'token_input',
+            ];
+            $this->fields_value['token_input'] = $tokenInputHtml;
         }
 
         $helper = new HelperForm();
@@ -354,14 +382,37 @@ class AdminKsAffiliationController extends ModuleAdminController
             $id_shop = (int) Configuration::get('PS_SHOP_DEFAULT');
         }
 
-        try {
-            /** @var Ks_affiliation $module */
-            $module   = $this->module;
-            $newToken = $module->generateToken();
-        } catch (\Throwable $e) {
-            $this->errors[] = $this->l('Could not generate a unique token. Please retry.');
+        $customToken = trim((string) Tools::getValue('custom_token', ''));
 
-            return false;
+        if ($customToken !== '') {
+            if (!preg_match(Ks_affiliation::TOKEN_REGEX, $customToken)) {
+                $this->errors[] = $this->l('Affiliate code must contain only letters and digits and be 3–64 characters long.');
+
+                return false;
+            }
+
+            $exists = (int) Db::getInstance()->getValue(
+                'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
+                 WHERE `token` = \'' . pSQL($customToken) . '\''
+            );
+
+            if ($exists > 0) {
+                $this->errors[] = $this->l('This affiliate code is already in use. Please choose another.');
+
+                return false;
+            }
+
+            $newToken = $customToken;
+        } else {
+            try {
+                /** @var Ks_affiliation $module */
+                $module   = $this->module;
+                $newToken = $module->generateToken();
+            } catch (\Throwable $e) {
+                $this->errors[] = $this->l('Could not generate a unique token. Please retry.');
+
+                return false;
+            }
         }
 
         $now = date('Y-m-d H:i:s');
