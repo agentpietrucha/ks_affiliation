@@ -34,16 +34,18 @@ The page also shows the value of **Customer Service > Merchandise Returns > Time
 | Cookie lifespan (days) | Yes | 1–3650. How long the tracking cookie persists after a click. Per-link, no global default. |
 | Payout percentage | No | 0–100. Used to compute the *Total payout* summary in the orders view. Hidden when empty/zero. |
 | Active | Yes | Soft on/off. Inactive links do nothing on click and do not attribute new orders. |
-| Token | Read-only | 12-char hex, auto-generated on create, never modifiable. Globally unique. |
+| Affiliate code | Optional on create | Alphanumeric, 3–64 chars. Type your own (e.g. `SummerSale2026`) or click **Generate** for a random 12-char code. Leave empty to auto-generate. Globally unique. Locked once the link is created. |
 
 ## Usage
 
 ### Sharing an affiliate URL
 
-Any URL on the store with `?affiliate_token=<TOKEN>` works:
+Any URL on the store with `?affiliate_token=<CODE>` works:
 
-- `https://shop-a.example.com/?affiliate_token=abcd1234ef56`
+- `https://shop-a.example.com/?affiliate_token=SummerSale2026`
 - `https://shop-a.example.com/some-product?affiliate_token=abcd1234ef56`
+
+The code is the value entered (or auto-generated) on the affiliate link. Allowed characters: letters and digits, 3–64 long.
 
 The legacy `/module/ks_affiliation/redirect?token=<TOKEN>` URL also works.
 
@@ -87,7 +89,7 @@ For each tracked order:
 ## Admin actions per link
 
 - **View Orders** — opens the orders view for the link.
-- **Edit** — change description, cookie lifespan, payout %, active flag. Token is preserved.
+- **Edit** — change description, cookie lifespan, payout %, active flag. Affiliate code is preserved (not editable after creation).
 - **Delete** — soft delete (sets `active = 0`, `deleted = 1`). Historical attributions remain visible.
 
 ## Data model
@@ -111,7 +113,7 @@ Both tables are dropped on uninstall.
 Current version: **1.0.3**. Upgrade scripts in `upgrade/` handle schema migrations between releases (idempotent).
 
 ## New features nice to have
-- [ ] Custom `affiliate_token`
+- [x] Custom `affiliate_token` — admin can type a custom alphanumeric code (3–64 chars) on create, or click *Generate* for a random one.
 
 ## Known bugs
 - Affiliate URL Copy button doesn't always work

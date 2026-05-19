@@ -21,7 +21,7 @@ require_once __DIR__ . '/classes/KsAffiliationLink.php';
 class Ks_affiliation extends Module
 {
     public const COOKIE_NAME = 'ks_affiliation_token';
-    public const TOKEN_REGEX = '/^[a-f0-9]{12}$/';
+    public const TOKEN_REGEX = '/^[A-Za-z0-9]{3,64}$/';
     public const QUERY_PARAM = 'affiliate_token';
 
     public function __construct()
@@ -289,9 +289,13 @@ class Ks_affiliation extends Module
             return;
         }
 
-        $token = strtolower(preg_replace('/[^a-f0-9]/i', '', $raw));
+        if (strlen($raw) > 256) {
+            return;
+        }
 
-        if ($token === '' || !preg_match(self::TOKEN_REGEX, $token)) {
+        $token = preg_replace('/[^A-Za-z0-9]/', '', $raw);
+
+        if (!is_string($token) || $token === '' || !preg_match(self::TOKEN_REGEX, $token)) {
             return;
         }
 
