@@ -29,10 +29,13 @@ class Ks_affiliationRedirectModuleFrontController extends ModuleFrontController
             return;
         }
 
+        $id_shop = (int) $this->context->shop->id;
+
         $row = Db::getInstance()->getRow(
             'SELECT `id_ks_affiliation_link`, `cookie_lifetime_days`
              FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `token` = \'' . pSQL($token) . '\'
+               AND `id_shop` = ' . $id_shop . '
                AND `active` = 1
                AND `deleted` = 0'
         );

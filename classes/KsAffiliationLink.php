@@ -24,6 +24,9 @@ class KsAffiliationLink extends ObjectModel
     /** @var string */
     public $token;
 
+    /** @var int */
+    public $id_shop;
+
     /** @var string */
     public $description;
 
@@ -50,6 +53,7 @@ class KsAffiliationLink extends ObjectModel
         'primary' => 'id_ks_affiliation_link',
         'fields'  => [
             'token'       => ['type' => self::TYPE_STRING, 'validate' => 'isString', 'size' => 12, 'required' => true],
+            'id_shop'     => ['type' => self::TYPE_INT,    'validate' => 'isUnsignedInt', 'required' => true],
             'description'          => ['type' => self::TYPE_STRING, 'validate' => 'isCleanHtml', 'size' => 255],
             'cookie_lifetime_days' => ['type' => self::TYPE_INT,    'validate' => 'isUnsignedInt', 'required' => true],
             'payout_percentage'    => ['type' => self::TYPE_FLOAT,  'validate' => 'isFloat',       'required' => true],

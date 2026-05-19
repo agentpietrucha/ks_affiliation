@@ -28,11 +28,12 @@ class Ks_affiliation extends Module
     {
         $this->name                   = 'ks_affiliation';
         $this->tab                    = 'administration';
-        $this->version                = '1.0.2';
+        $this->version                = '1.0.3';
         $this->author                 = 'KS Development';
         $this->need_instance          = 0;
         $this->bootstrap              = true;
         $this->ps_versions_compliancy = ['min' => '8.0.0', 'max' => '8.9.99'];
+        $this->multistore_compatibility = self::MULTISTORE_COMPATIBILITY_YES;
 
         parent::__construct();
 
@@ -145,6 +146,7 @@ class Ks_affiliation extends Module
         $sqlLink = 'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'ks_affiliation_link` (
             `id_ks_affiliation_link` INT(11) NOT NULL AUTO_INCREMENT,
             `token`                  VARCHAR(12) NOT NULL,
+            `id_shop`                INT(11) UNSIGNED NOT NULL,
             `description`            VARCHAR(255) NOT NULL DEFAULT \'\',
             `cookie_lifetime_days`   INT(11) UNSIGNED NOT NULL DEFAULT 30,
             `payout_percentage`      DECIMAL(5,2) NOT NULL DEFAULT 0.00,
@@ -154,17 +156,20 @@ class Ks_affiliation extends Module
             `date_upd`               DATETIME NOT NULL,
             PRIMARY KEY (`id_ks_affiliation_link`),
             UNIQUE KEY `uq_token` (`token`),
-            KEY `idx_active_deleted` (`active`, `deleted`)
+            KEY `idx_active_deleted` (`active`, `deleted`),
+            KEY `idx_shop` (`id_shop`)
         ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4;';
 
         $sqlOrder = 'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'ks_affiliation_order` (
             `id_ks_affiliation_order` INT(11) NOT NULL AUTO_INCREMENT,
             `id_ks_affiliation_link`  INT(11) NOT NULL,
             `id_order`                INT(11) UNSIGNED NOT NULL,
+            `id_shop`                 INT(11) UNSIGNED NOT NULL,
             `date_add`                DATETIME NOT NULL,
             PRIMARY KEY (`id_ks_affiliation_order`),
             UNIQUE KEY `uq_order` (`id_order`),
-            KEY `idx_link` (`id_ks_affiliation_link`)
+            KEY `idx_link` (`id_ks_affiliation_link`),
+            KEY `idx_shop` (`id_shop`)
         ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4;';
 
         return Db::getInstance()->execute($sqlLink)
@@ -235,9 +240,21 @@ class Ks_affiliation extends Module
             return;
         }
 
+        if (!isset($params['order']) || !is_object($params['order'])) {
+            return;
+        }
+
+        $id_order = (int) $params['order']->id;
+        $id_shop  = (int) $params['order']->id_shop;
+
+        if ($id_order === 0 || $id_shop === 0) {
+            return;
+        }
+
         $id_link = (int) Db::getInstance()->getValue(
             'SELECT `id_ks_affiliation_link` FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `token` = \'' . pSQL($token) . '\'
+               AND `id_shop` = ' . $id_shop . '
                AND `active` = 1
                AND `deleted` = 0'
         );
@@ -246,20 +263,11 @@ class Ks_affiliation extends Module
             return;
         }
 
-        if (!isset($params['order']) || !is_object($params['order'])) {
-            return;
-        }
-
-        $id_order = (int) $params['order']->id;
-
-        if ($id_order === 0) {
-            return;
-        }
-
         try {
             Db::getInstance()->insert('ks_affiliation_order', [
                 'id_ks_affiliation_link' => $id_link,
                 'id_order'               => $id_order,
+                'id_shop'                => $id_shop,
                 'date_add'               => date('Y-m-d H:i:s'),
             ]);
         } catch (\Throwable $e) {
@@ -287,10 +295,13 @@ class Ks_affiliation extends Module
             return;
         }
 
+        $id_shop = (int) $this->context->shop->id;
+
         $row = Db::getInstance()->getRow(
             'SELECT `id_ks_affiliation_link`, `cookie_lifetime_days`
              FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `token` = \'' . pSQL($token) . '\'
+               AND `id_shop` = ' . $id_shop . '
                AND `active` = 1
                AND `deleted` = 0'
         );

@@ -36,9 +36,18 @@ class AdminKsAffiliationController extends ModuleAdminController
 
         $this->_where = ' AND a.`deleted` = 0';
 
+        $shopIds = Shop::getContextListShopID();
+        if (!empty($shopIds)) {
+            $shopIdsCast = array_map('intval', (array) $shopIds);
+            $this->_where .= ' AND a.`id_shop` IN (' . implode(',', $shopIdsCast) . ')';
+        }
+
         $this->_select = "a.`token` AS `full_url`,
+                          s.`name` AS `shop_name`,
                           (SELECT COUNT(*) FROM `" . _DB_PREFIX_ . "ks_affiliation_order` kao
                           WHERE kao.`id_ks_affiliation_link` = a.`id_ks_affiliation_link`) AS `orders_count`";
+
+        $this->_join = ' LEFT JOIN `' . _DB_PREFIX_ . 'shop` s ON s.`id_shop` = a.`id_shop`';
 
         $this->fields_list = [
             'id_ks_affiliation_link' => [
@@ -48,6 +57,11 @@ class AdminKsAffiliationController extends ModuleAdminController
             ],
             'description' => [
                 'title' => $this->l('Description'),
+            ],
+            'shop_name' => [
+                'title'   => $this->l('Shop'),
+                'search'  => false,
+                'orderby' => false,
             ],
             'token' => [
                 'title' => $this->l('Token'),
@@ -92,6 +106,13 @@ class AdminKsAffiliationController extends ModuleAdminController
                 'orderby' => false,
             ],
         ];
+    }
+
+    public function setMedia($isNewTheme = false)
+    {
+        parent::setMedia($isNewTheme);
+        $this->addCSS(_MODULE_DIR_ . 'ks_affiliation/views/css/admin.css');
+        $this->addJS(_MODULE_DIR_ . 'ks_affiliation/views/js/admin.js');
     }
 
     public function initContent(): void
@@ -140,18 +161,34 @@ class AdminKsAffiliationController extends ModuleAdminController
 
     public function displayFullUrl(string $token, array $row): string
     {
-        $base = $this->context->link->getPageLink('index', true);
-        $sep  = (strpos($base, '?') === false) ? '?' : '&';
-        $url  = $base . $sep . Ks_affiliation::QUERY_PARAM . '=' . rawurlencode($row['token']);
+        $id_shop  = isset($row['id_shop']) ? (int) $row['id_shop'] : (int) $this->context->shop->id;
+        $base     = $this->context->link->getPageLink('index', true, null, null, false, $id_shop);
+        $sep      = (strpos($base, '?') === false) ? '?' : '&';
+        $url      = $base . $sep . Ks_affiliation::QUERY_PARAM . '=' . rawurlencode($row['token']);
 
-        $rendered = '<div class="input-group">';
-        $rendered .= '<input type="text" class="form-control" readonly value="'
-            . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '">';
+        $urlAttr   = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $copyLabel = htmlspecialchars($this->l('Copy'), ENT_QUOTES, 'UTF-8');
+
+        $inline = "(function(btn){"
+                . "var t=btn.getAttribute('data-url');"
+                . "var done=function(){var o=btn.innerHTML;btn.innerHTML=" . json_encode($this->l('Copied!')) . ";"
+                . "setTimeout(function(){btn.innerHTML=o;},1500);};"
+                . "var legacy=function(){var ta=document.createElement('textarea');ta.value=t;"
+                . "ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);"
+                . "ta.focus();ta.select();var ok=false;try{ok=document.execCommand('copy');}catch(e){}"
+                . "document.body.removeChild(ta);return ok;};"
+                . "if(window.isSecureContext&&navigator.clipboard&&navigator.clipboard.writeText){"
+                . "navigator.clipboard.writeText(t).then(done,function(){if(legacy())done();});"
+                . "}else{if(legacy())done();}"
+                . "})(this);return false;";
+
+        $inlineAttr = htmlspecialchars($inline, ENT_QUOTES, 'UTF-8');
+
+        $rendered  = '<div class="input-group">';
+        $rendered .= '<input type="text" class="form-control" readonly value="' . $urlAttr . '" onclick="this.select();">';
         $rendered .= '<span class="input-group-btn">';
-        $rendered .= '<button type="button" class="btn btn-default ks-copy-url" data-url="'
-            . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '">'
-            . htmlspecialchars($this->l('Copy'), ENT_QUOTES, 'UTF-8')
-            . '</button>';
+        $rendered .= '<button type="button" class="btn btn-default" data-url="' . $urlAttr . '" onclick="' . $inlineAttr . '">'
+            . $copyLabel . '</button>';
         $rendered .= '</span></div>';
 
         return $rendered;
@@ -171,12 +208,19 @@ class AdminKsAffiliationController extends ModuleAdminController
 
     public function renderForm(): string
     {
+        $id = (int) Tools::getValue('id_ks_affiliation_link');
+
         $this->fields_form = [
             'legend' => [
                 'title' => $this->l('Affiliate link'),
                 'icon'  => 'icon-link',
             ],
             'input' => [
+                [
+                    'type'  => 'free',
+                    'label' => '',
+                    'name'  => 'id_ks_affiliation_link_raw',
+                ],
                 [
                     'type'     => 'text',
                     'label'    => $this->l('Description'),
@@ -216,8 +260,7 @@ class AdminKsAffiliationController extends ModuleAdminController
             'submit' => ['title' => $this->l('Save')],
         ];
 
-        $id        = (int) Tools::getValue('id_ks_affiliation_link');
-        $row       = [];
+        $row = [];
 
         if ($id > 0) {
             $row = Db::getInstance()->getRow(
@@ -227,11 +270,12 @@ class AdminKsAffiliationController extends ModuleAdminController
         }
 
         $this->fields_value = [
-            'description'          => $row['description'] ?? '',
-            'cookie_lifetime_days' => isset($row['cookie_lifetime_days']) ? (int) $row['cookie_lifetime_days'] : 30,
-            'payout_percentage'    => isset($row['payout_percentage']) ? (float) $row['payout_percentage'] : 0,
-            'active'               => isset($row['active']) ? (int) $row['active'] : 1,
-            'token_display'        => $row['token'] ?? '',
+            'id_ks_affiliation_link_raw' => '<input type="hidden" name="id_ks_affiliation_link" value="' . $id . '">',
+            'description'                => $row['description'] ?? '',
+            'cookie_lifetime_days'       => isset($row['cookie_lifetime_days']) ? (int) $row['cookie_lifetime_days'] : 30,
+            'payout_percentage'          => isset($row['payout_percentage']) ? (float) $row['payout_percentage'] : 0,
+            'active'                     => isset($row['active']) ? (int) $row['active'] : 1,
+            'token_display'              => $row['token'] ?? '',
         ];
 
         if (!empty($row['token'])) {
@@ -248,7 +292,8 @@ class AdminKsAffiliationController extends ModuleAdminController
         $helper->name_controller = $this->controller_name;
         $helper->identifier      = $this->identifier;
         $helper->token           = $this->token;
-        $helper->currentIndex    = self::$currentIndex;
+        $helper->currentIndex    = self::$currentIndex
+            . ($id > 0 ? '&id_ks_affiliation_link=' . $id . '&update' . $this->table : '');
         $helper->table           = $this->table;
         $helper->title           = $this->l('Affiliate link');
         $helper->show_toolbar    = true;
@@ -264,135 +309,70 @@ class AdminKsAffiliationController extends ModuleAdminController
         return $helper->generateForm([['form' => $this->fields_form]]);
     }
 
-    public function postProcess(): void
+    public function postProcess()
     {
-        $token = Tools::getValue('token');
-        if (Tools::isSubmit('submitAdd' . $this->table) || Tools::isSubmit('delete' . $this->table)) {
-            if ($token !== $this->token) {
-                $this->errors[] = $this->l('Invalid security token.');
-
-                return;
-            }
-        }
-
-        if (Tools::isSubmit('submitAdd' . $this->table)) {
-            $this->processSaveLink();
-
-            return;
-        }
-
-        if (Tools::isSubmit('delete' . $this->table)) {
-            $this->processSoftDelete((int) Tools::getValue('id_ks_affiliation_link'));
-
-            return;
-        }
-
         if (Tools::getValue('action') === 'toggleactive') {
-            if ($token !== $this->token) {
+            if (Tools::getValue('token') !== $this->token) {
                 $this->errors[] = $this->l('Invalid security token.');
 
-                return;
+                return false;
             }
             $this->processToggleActive((int) Tools::getValue('id_ks_affiliation_link'));
 
-            return;
+            return true;
         }
 
-        parent::postProcess();
+        if (Tools::isSubmit('delete' . $this->table)) {
+            if (Tools::getValue('token') !== $this->token) {
+                $this->errors[] = $this->l('Invalid security token.');
+
+                return false;
+            }
+            $this->processSoftDelete((int) Tools::getValue('id_ks_affiliation_link'));
+
+            return true;
+        }
+
+        return parent::postProcess();
     }
 
-    private function processSaveLink(): void
+    public function processAdd()
     {
-        $id          = (int) Tools::getValue('id_ks_affiliation_link');
-        $description = trim((string) Tools::getValue('description'));
-        $active      = (int) Tools::getValue('active') === 1 ? 1 : 0;
-        $lifetimeRaw = trim((string) Tools::getValue('cookie_lifetime_days'));
-
-        if ($description === '') {
-            $this->errors[] = $this->l('Description is required.');
-
-            return;
+        $validated = $this->validateLinkInput();
+        if ($validated === null) {
+            return false;
         }
 
-        if (mb_strlen($description) > 255) {
-            $this->errors[] = $this->l('Description must be 255 characters or fewer.');
+        if (Shop::isFeatureActive() && Shop::getContext() !== Shop::CONTEXT_SHOP) {
+            $this->errors[] = $this->l('Please select a single shop in the multi-store header before creating an affiliate link.');
 
-            return;
+            return false;
         }
 
-        if ($lifetimeRaw === '' || !ctype_digit($lifetimeRaw)) {
-            $this->errors[] = $this->l('Cookie lifespan is required and must be a positive integer.');
-
-            return;
-        }
-
-        $lifetime = (int) $lifetimeRaw;
-        if ($lifetime <= 0 || $lifetime > 3650) {
-            $this->errors[] = $this->l('Cookie lifespan must be between 1 and 3650 days.');
-
-            return;
-        }
-
-        $payoutRaw = trim((string) Tools::getValue('payout_percentage'));
-        $payoutRaw = str_replace(',', '.', $payoutRaw);
-        if ($payoutRaw === '') {
-            $payout = 0.0;
-        } else {
-            if (!is_numeric($payoutRaw)) {
-                $this->errors[] = $this->l('Payout percentage must be numeric.');
-
-                return;
-            }
-
-            $payout = round((float) $payoutRaw, 2);
-            if ($payout < 0 || $payout > 100) {
-                $this->errors[] = $this->l('Payout percentage must be between 0 and 100.');
-
-                return;
-            }
-        }
-
-        $now = date('Y-m-d H:i:s');
-
-        if ($id > 0) {
-            $ok = Db::getInstance()->update(
-                bqSQL($this->table),
-                [
-                    'description'          => pSQL($description),
-                    'cookie_lifetime_days' => $lifetime,
-                    'payout_percentage'    => (float) $payout,
-                    'active'               => $active,
-                    'date_upd'             => $now,
-                ],
-                '`id_ks_affiliation_link` = ' . $id
-            );
-
-            if (!$ok) {
-                $this->errors[] = $this->l('Could not save the affiliate link.');
-
-                return;
-            }
-
-            $this->confirmations[] = $this->l('Affiliate link updated.');
-            Tools::redirectAdmin(self::$currentIndex . '&conf=4&token=' . $this->token);
+        $id_shop = (int) Shop::getContextShopID();
+        if ($id_shop <= 0) {
+            $id_shop = (int) Configuration::get('PS_SHOP_DEFAULT');
         }
 
         try {
             /** @var Ks_affiliation $module */
-            $module     = $this->module;
-            $newToken   = $module->generateToken();
+            $module   = $this->module;
+            $newToken = $module->generateToken();
         } catch (\Throwable $e) {
             $this->errors[] = $this->l('Could not generate a unique token. Please retry.');
 
-            return;
+            return false;
         }
+
+        $now = date('Y-m-d H:i:s');
 
         $ok = Db::getInstance()->insert($this->table, [
             'token'                => pSQL($newToken),
-            'description'          => pSQL($description),
-            'cookie_lifetime_days' => $lifetime,
-            'payout_percentage'    => (float) $payout,
-            'active'               => $active,
+            'id_shop'              => $id_shop,
+            'description'          => pSQL($validated['description']),
+            'cookie_lifetime_days' => $validated['lifetime'],
+            'payout_percentage'    => (float) $validated['payout'],
+            'active'               => $validated['active'],
             'deleted'              => 0,
             'date_add'             => $now,
             'date_upd'             => $now,
@@ -401,11 +381,119 @@ class AdminKsAffiliationController extends ModuleAdminController
         if (!$ok) {
             $this->errors[] = $this->l('Could not create the affiliate link.');
 
-            return;
+            return false;
         }
 
         $this->confirmations[] = $this->l('Affiliate link created.');
         Tools::redirectAdmin(self::$currentIndex . '&conf=3&token=' . $this->token);
+
+        return true;
+    }
+
+    public function processUpdate()
+    {
+        $id = (int) Tools::getValue($this->identifier);
+        if ($id <= 0) {
+            $this->errors[] = $this->l('Missing affiliate link ID.');
+
+            return false;
+        }
+
+        $exists = (int) Db::getInstance()->getValue(
+            'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
+             WHERE `id_ks_affiliation_link` = ' . $id . ' AND `deleted` = 0'
+        );
+
+        if ($exists === 0) {
+            $this->errors[] = $this->l('Affiliate link not found.');
+
+            return false;
+        }
+
+        $validated = $this->validateLinkInput();
+        if ($validated === null) {
+            return false;
+        }
+
+        $ok = Db::getInstance()->update(
+            bqSQL($this->table),
+            [
+                'description'          => pSQL($validated['description']),
+                'cookie_lifetime_days' => $validated['lifetime'],
+                'payout_percentage'    => (float) $validated['payout'],
+                'active'               => $validated['active'],
+                'date_upd'             => date('Y-m-d H:i:s'),
+            ],
+            '`id_ks_affiliation_link` = ' . $id
+        );
+
+        if (!$ok) {
+            $this->errors[] = $this->l('Could not save the affiliate link.');
+
+            return false;
+        }
+
+        $this->confirmations[] = $this->l('Affiliate link updated.');
+        Tools::redirectAdmin(self::$currentIndex . '&conf=4&token=' . $this->token);
+
+        return true;
+    }
+
+    private function validateLinkInput(): ?array
+    {
+        $description = trim((string) Tools::getValue('description'));
+        $active      = (int) Tools::getValue('active') === 1 ? 1 : 0;
+        $lifetimeRaw = trim((string) Tools::getValue('cookie_lifetime_days'));
+
+        if ($description === '') {
+            $this->errors[] = $this->l('Description is required.');
+
+            return null;
+        }
+
+        if (mb_strlen($description) > 255) {
+            $this->errors[] = $this->l('Description must be 255 characters or fewer.');
+
+            return null;
+        }
+
+        if ($lifetimeRaw === '' || !ctype_digit($lifetimeRaw)) {
+            $this->errors[] = $this->l('Cookie lifespan is required and must be a positive integer.');
+
+            return null;
+        }
+
+        $lifetime = (int) $lifetimeRaw;
+        if ($lifetime <= 0 || $lifetime > 3650) {
+            $this->errors[] = $this->l('Cookie lifespan must be between 1 and 3650 days.');
+
+            return null;
+        }
+
+        $payoutRaw = str_replace(',', '.', trim((string) Tools::getValue('payout_percentage')));
+        if ($payoutRaw === '') {
+            $payout = 0.0;
+        } else {
+            if (!is_numeric($payoutRaw)) {
+                $this->errors[] = $this->l('Payout percentage must be numeric.');
+
+                return null;
+            }
+
+            $payout = round((float) $payoutRaw, 2);
+            if ($payout < 0 || $payout > 100) {
+                $this->errors[] = $this->l('Payout percentage must be between 0 and 100.');
+
+                return null;
+            }
+        }
+
+        return [
+            'description' => $description,
+            'lifetime'    => $lifetime,
+            'payout'      => $payout,
+            'active'      => $active,
+        ];
     }
 
     private function processSoftDelete(int $id): void
@@ -493,11 +581,24 @@ class AdminKsAffiliationController extends ModuleAdminController
 
     private function renderOrdersView(int $id_link): string
     {
+        $shopIds      = Shop::getContextListShopID();
+        $shopFilter   = '';
+        if (!empty($shopIds)) {
+            $shopFilter = ' AND `id_shop` IN (' . implode(',', array_map('intval', (array) $shopIds)) . ')';
+        }
+
         $link = Db::getInstance()->getRow(
             'SELECT `description`, `payout_percentage`
              FROM `' . _DB_PREFIX_ . 'ks_affiliation_link`
              WHERE `id_ks_affiliation_link` = ' . $id_link
+            . $shopFilter
         );
+
+        if (!is_array($link)) {
+            return '<p class="alert alert-warning">'
+                . htmlspecialchars($this->l('This affiliate link does not belong to the selected shop.'), ENT_QUOTES, 'UTF-8')
+                . '</p>';
+        }
 
         $description = isset($link['description']) ? (string) $link['description'] : '';
         $payoutPct   = isset($link['payout_percentage']) ? (float) $link['payout_percentage'] : 0.0;
