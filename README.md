@@ -109,3 +109,10 @@ Both tables are dropped on uninstall.
 ## Versioning
 
 Current version: **1.0.3**. Upgrade scripts in `upgrade/` handle schema migrations between releases (idempotent).
+
+## New features nice to have
+- [ ] Custom `affiliate_token`
+
+## Known bugs
+- Affiliate URL Copy button doesn't always work
+- Editing existing affiliate link doesn't work. New entry is created instead of editing the existing
