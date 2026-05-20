@@ -716,14 +716,7 @@ class AdminKsAffiliationController extends ModuleAdminController
             ];
         }
 
-        if ($returnStatus === 'partial') {
-            return [
-                'key'   => 'partial',
-                'label' => $this->l('Partially Completed'),
-                'color' => '#f0ad4e',
-            ];
-        }
-
+        $returnWindowPassed = false;
         if ($completedStateId > 0) {
             $completedDate = Db::getInstance()->getValue(
                 'SELECT MIN(`date_add`) FROM `' . _DB_PREFIX_ . 'order_history`
@@ -735,13 +728,33 @@ class AdminKsAffiliationController extends ModuleAdminController
                 $daysSince = (int) floor((time() - strtotime((string) $completedDate)) / 86400);
                 $threshold = $returnDays + max(0, $delayDays);
                 if ($threshold > 0 && $daysSince >= $threshold) {
-                    return [
-                        'key'   => 'completed',
-                        'label' => $this->l('Completed'),
-                        'color' => '#5cb85c',
-                    ];
+                    $returnWindowPassed = true;
                 }
             }
+        }
+
+        if ($returnStatus === 'partial') {
+            if ($returnWindowPassed) {
+                return [
+                    'key'   => 'completed',
+                    'label' => $this->l('Completed'),
+                    'color' => '#5cb85c',
+                ];
+            }
+
+            return [
+                'key'   => 'partial',
+                'label' => $this->l('Partially Completed'),
+                'color' => '#f0ad4e',
+            ];
+        }
+
+        if ($returnWindowPassed) {
+            return [
+                'key'   => 'completed',
+                'label' => $this->l('Completed'),
+                'color' => '#5cb85c',
+            ];
         }
 
         return [
