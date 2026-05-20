@@ -22,15 +22,29 @@
     </p>
     {if $orders}
         <div class="row" style="margin-bottom:15px;">
-            <div class="col-md-4">
+            <div class="col-md-3">
+                <div class="panel" style="padding:10px;">
+                    <strong>{l s='Total completed orders amount' mod='ks_affiliation'}</strong><br>
+                    <span style="font-size:18px;">{$total_completed|escape:'htmlall':'UTF-8'}</span>
+                    <small class="text-muted">{l s='(excl. shipping)' mod='ks_affiliation'}</small>
+                </div>
+            </div>
+            <div class="col-md-3">
                 <div class="panel" style="padding:10px;">
                     <strong>{l s='Total orders amount' mod='ks_affiliation'}</strong><br>
                     <span style="font-size:18px;">{$total_orders|escape:'htmlall':'UTF-8'}</span>
                     <small class="text-muted">{l s='(excl. shipping)' mod='ks_affiliation'}</small>
                 </div>
             </div>
+            <div class="col-md-3">
+                <div class="panel" style="padding:10px;">
+                    <strong>{l s='Total returns amount' mod='ks_affiliation'}</strong><br>
+                    <span style="font-size:18px;">{$total_returns|escape:'htmlall':'UTF-8'}</span>
+                    <small class="text-muted">{l s='(excl. shipping)' mod='ks_affiliation'}</small>
+                </div>
+            </div>
             {if $has_payout}
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="panel" style="padding:10px;">
                         <strong>{l s='Total payout' mod='ks_affiliation'}</strong><br>
                         <span style="font-size:18px;">{$total_payout|escape:'htmlall':'UTF-8'}</span>
@@ -49,6 +63,7 @@
                     <th>{l s='Total Paid' mod='ks_affiliation'}</th>
                     <th>{l s='Date' mod='ks_affiliation'}</th>
                     <th>{l s='Status' mod='ks_affiliation'}</th>
+                    <th>{l s='Finished' mod='ks_affiliation'}</th>
                     <th>{l s='Action' mod='ks_affiliation'}</th>
                 </tr>
             </thead>
@@ -64,6 +79,16 @@
                                   style="display:inline-block;padding:2px 8px;border-radius:3px;color:#fff;background:{$order.status_color|escape:'htmlall':'UTF-8'};">
                                 {$order.status_label|escape:'htmlall':'UTF-8'}
                             </span>
+                        </td>
+                        <td>
+                            <form method="post" action="{$toggle_url|escape:'htmlall':'UTF-8'}" style="margin:0;">
+                                <input type="hidden" name="action" value="togglefinished">
+                                <input type="hidden" name="id_ks_affiliation_link" value="{$id_link|intval}">
+                                <input type="hidden" name="id_ks_affiliation_order" value="{$order.id_ks_affiliation_order|intval}">
+                                <input type="checkbox" name="finished"
+                                       onchange="this.form.submit();"
+                                       {if $order.finished}checked="checked"{/if}>
+                            </form>
                         </td>
                         <td>
                             <a href="{$order.order_url|escape:'htmlall':'UTF-8'}"
