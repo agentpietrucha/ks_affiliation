@@ -350,6 +350,20 @@ class AdminKsAffiliationController extends ModuleAdminController
             return true;
         }
 
+        if (Tools::getValue('action') === 'togglefinished') {
+            if (Tools::getValue('token') !== $this->token) {
+                $this->errors[] = $this->l('Invalid security token.');
+
+                return false;
+            }
+            $this->processToggleFinished(
+                (int) Tools::getValue('id_ks_affiliation_order'),
+                (int) Tools::getValue('id_ks_affiliation_link')
+            );
+
+            return true;
+        }
+
         if (Tools::isSubmit('delete' . $this->table)) {
             if (Tools::getValue('token') !== $this->token) {
                 $this->errors[] = $this->l('Invalid security token.');
@@ -592,17 +606,121 @@ class AdminKsAffiliationController extends ModuleAdminController
         Tools::redirectAdmin(self::$currentIndex . '&conf=5&token=' . $this->token);
     }
 
-    private function computeOrderStatus(int $id_order, int $completedStateId, int $returnDays): array
+    private function processToggleFinished(int $id_order_row, int $id_link): void
     {
-        $hasReturn = (int) Db::getInstance()->getValue(
-            'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'order_return`
-             WHERE `id_order` = ' . $id_order
+        if ($id_order_row <= 0 || $id_link <= 0) {
+            $this->errors[] = $this->l('Invalid order row.');
+
+            return;
+        }
+
+        $shopIds    = Shop::getContextListShopID();
+        $shopFilter = '';
+        if (!empty($shopIds)) {
+            $shopFilter = ' AND `id_shop` IN (' . implode(',', array_map('intval', (array) $shopIds)) . ')';
+        }
+
+        Db::getInstance()->execute(
+            'UPDATE `' . _DB_PREFIX_ . 'ks_affiliation_order`
+             SET `finished` = 1 - `finished`
+             WHERE `id_ks_affiliation_order` = ' . $id_order_row . '
+               AND `id_ks_affiliation_link` = ' . $id_link
+            . $shopFilter
         );
 
-        if ($hasReturn > 0) {
+        Tools::redirectAdmin(
+            self::$currentIndex
+            . '&action=vieworders&id_ks_affiliation_link=' . $id_link
+            . '&token=' . $this->token
+        );
+    }
+
+    /**
+     * Per-line returned quantity = max(sum of order_return_detail.product_quantity,
+     * order_detail.product_quantity_refunded), clamped to product_quantity.
+     *
+     * Returns ['status' => 'none'|'partial'|'full',
+     *          'effective_amount' => float (kept value),
+     *          'returned_amount' => float]
+     */
+    private function computeReturnSummary(int $id_order, float $fallbackAmount): array
+    {
+        $rows = Db::getInstance()->executeS(
+            'SELECT od.`id_order_detail`,
+                    od.`product_quantity`,
+                    od.`product_quantity_refunded`,
+                    od.`unit_price_tax_incl`,
+                    COALESCE((
+                        SELECT SUM(ord.`product_quantity`)
+                        FROM `' . _DB_PREFIX_ . 'order_return` orr
+                        INNER JOIN `' . _DB_PREFIX_ . 'order_return_detail` ord
+                                ON ord.`id_order_return` = orr.`id_order_return`
+                        WHERE orr.`id_order` = od.`id_order`
+                          AND ord.`id_order_detail` = od.`id_order_detail`
+                    ), 0) AS `returned_qty`
+             FROM `' . _DB_PREFIX_ . 'order_detail` od
+             WHERE od.`id_order` = ' . $id_order
+        );
+
+        if (!is_array($rows) || empty($rows)) {
+            return ['status' => 'none', 'effective_amount' => $fallbackAmount, 'returned_amount' => 0.0];
+        }
+
+        $totalQty       = 0;
+        $returnedQtySum = 0;
+        $returnedValue  = 0.0;
+
+        foreach ($rows as $r) {
+            $qty       = (int) $r['product_quantity'];
+            $refunded  = (int) $r['product_quantity_refunded'];
+            $requested = (int) $r['returned_qty'];
+            $price     = (float) $r['unit_price_tax_incl'];
+
+            $effReturned = max($refunded, $requested);
+            if ($effReturned > $qty) {
+                $effReturned = $qty;
+            }
+
+            $totalQty       += $qty;
+            $returnedQtySum += $effReturned;
+            $returnedValue  += $effReturned * $price;
+        }
+
+        if ($returnedQtySum <= 0) {
+            $status = 'none';
+        } elseif ($returnedQtySum >= $totalQty) {
+            $status = 'full';
+        } else {
+            $status = 'partial';
+        }
+
+        $effective = $fallbackAmount - $returnedValue;
+        if ($effective < 0) {
+            $effective = 0.0;
+        }
+
+        return [
+            'status'           => $status,
+            'effective_amount' => $effective,
+            'returned_amount'  => $returnedValue,
+        ];
+    }
+
+    private function computeOrderStatus(int $id_order, int $completedStateId, int $returnDays, int $delayDays, string $returnStatus): array
+    {
+        if ($returnStatus === 'full') {
             return [
+                'key'   => 'returned',
                 'label' => $this->l('Returned'),
                 'color' => '#d9534f',
+            ];
+        }
+
+        if ($returnStatus === 'partial') {
+            return [
+                'key'   => 'partial',
+                'label' => $this->l('Partially Completed'),
+                'color' => '#f0ad4e',
             ];
         }
 
@@ -615,8 +733,10 @@ class AdminKsAffiliationController extends ModuleAdminController
 
             if (!empty($completedDate)) {
                 $daysSince = (int) floor((time() - strtotime((string) $completedDate)) / 86400);
-                if ($returnDays > 0 && $daysSince >= $returnDays) {
+                $threshold = $returnDays + max(0, $delayDays);
+                if ($threshold > 0 && $daysSince >= $threshold) {
                     return [
+                        'key'   => 'completed',
                         'label' => $this->l('Completed'),
                         'color' => '#5cb85c',
                     ];
@@ -625,6 +745,7 @@ class AdminKsAffiliationController extends ModuleAdminController
         }
 
         return [
+            'key'   => 'awaiting',
             'label' => $this->l('Awaiting'),
             'color' => '#999999',
         ];
@@ -655,7 +776,8 @@ class AdminKsAffiliationController extends ModuleAdminController
         $payoutPct   = isset($link['payout_percentage']) ? (float) $link['payout_percentage'] : 0.0;
 
         $rows = Db::getInstance()->executeS(
-            'SELECT o.`id_order`, o.`reference`, o.`total_paid`, o.`total_products_wt`, o.`date_add`
+            'SELECT kao.`id_ks_affiliation_order`, kao.`finished`,
+                    o.`id_order`, o.`reference`, o.`total_paid`, o.`total_products_wt`, o.`date_add`
              FROM `' . _DB_PREFIX_ . 'ks_affiliation_order` kao
              INNER JOIN `' . _DB_PREFIX_ . 'orders` o ON o.`id_order` = kao.`id_order`
              WHERE kao.`id_ks_affiliation_link` = ' . $id_link . '
@@ -664,19 +786,28 @@ class AdminKsAffiliationController extends ModuleAdminController
 
         $completedStateId = (int) Configuration::get('KS_AFFILIATION_COMPLETED_STATE');
         $returnDays       = (int) Configuration::get('PS_ORDER_RETURN_NB_DAYS');
+        $delayDays        = (int) Configuration::get('KS_AFFILIATION_COMPLETED_DELAY');
 
-        $orders          = [];
-        $orderAmountSum  = 0.0;
+        $orders             = [];
+        $totalOrdersAmount  = 0.0;
+        $totalCompletedAmount = 0.0;
+        $totalReturnsAmount = 0.0;
         foreach ((array) $rows as $r) {
             $id_order = (int) $r['id_order'];
-            $status   = $this->computeOrderStatus($id_order, $completedStateId, $returnDays);
+            $summary  = $this->computeReturnSummary($id_order, (float) $r['total_products_wt']);
+            $status   = $this->computeOrderStatus($id_order, $completedStateId, $returnDays, $delayDays, $summary['status']);
 
-            $orderAmountSum += (float) $r['total_products_wt'];
+            $totalOrdersAmount  += (float) $r['total_products_wt'];
+            $totalReturnsAmount += (float) $summary['returned_amount'];
+            if ($status['key'] === 'completed') {
+                $totalCompletedAmount += (float) $summary['effective_amount'];
+            }
 
             $orders[] = [
+                'id_ks_affiliation_order' => (int) $r['id_ks_affiliation_order'],
                 'id_order'     => $id_order,
                 'reference'    => (string) $r['reference'],
-                'total_paid'   => Tools::displayPrice((float) $r['total_paid']),
+                'total_paid'   => Tools::displayPrice($summary['effective_amount']),
                 'date_add'     => (string) $r['date_add'],
                 'order_url'    => $this->context->link->getAdminLink(
                     'AdminOrders',
@@ -685,25 +816,30 @@ class AdminKsAffiliationController extends ModuleAdminController
                 ),
                 'status_label' => $status['label'],
                 'status_color' => $status['color'],
+                'finished'     => (int) $r['finished'] === 1,
             ];
         }
 
-        $payoutTotal = round($orderAmountSum * ($payoutPct / 100), 2);
+        $payoutTotal = round($totalCompletedAmount * ($payoutPct / 100), 2);
 
         $back_url = self::$currentIndex . '&token=' . $this->token;
 
         $hasPayout = $payoutPct > 0;
 
         $this->context->smarty->assign([
-            'link_description'  => $description,
-            'orders'            => $orders,
-            'back_url'          => $back_url,
-            'has_payout'        => $hasPayout,
-            'payout_percentage' => $hasPayout
+            'link_description'      => $description,
+            'id_link'               => $id_link,
+            'toggle_url'            => self::$currentIndex . '&token=' . $this->token,
+            'orders'                => $orders,
+            'back_url'              => $back_url,
+            'has_payout'            => $hasPayout,
+            'payout_percentage'     => $hasPayout
                 ? rtrim(rtrim(number_format($payoutPct, 2, '.', ''), '0'), '.') . '%'
                 : '',
-            'total_orders'      => Tools::displayPrice($orderAmountSum),
-            'total_payout'      => $hasPayout ? Tools::displayPrice($payoutTotal) : '',
+            'total_completed'       => Tools::displayPrice($totalCompletedAmount),
+            'total_orders'          => Tools::displayPrice($totalOrdersAmount),
+            'total_returns'         => Tools::displayPrice($totalReturnsAmount),
+            'total_payout'          => $hasPayout ? Tools::displayPrice($payoutTotal) : '',
         ]);
 
         return $this->context->smarty->fetch(

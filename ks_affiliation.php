@@ -28,7 +28,7 @@ class Ks_affiliation extends Module
     {
         $this->name                   = 'ks_affiliation';
         $this->tab                    = 'administration';
-        $this->version                = '1.0.3';
+        $this->version                = '1.0.4';
         $this->author                 = 'KS Development';
         $this->need_instance          = 0;
         $this->bootstrap              = true;
@@ -51,7 +51,8 @@ class Ks_affiliation extends Module
             && $this->registerHook('displayHeader')
             && $this->registerHook('displayBackOfficeHeader')
             && Configuration::updateValue('KS_AFFILIATION_COOKIE_LIFETIME', 30)
-            && Configuration::updateValue('KS_AFFILIATION_COMPLETED_STATE', 0);
+            && Configuration::updateValue('KS_AFFILIATION_COMPLETED_STATE', 0)
+            && Configuration::updateValue('KS_AFFILIATION_COMPLETED_DELAY', 0);
     }
 
     public function uninstall(): bool
@@ -60,7 +61,8 @@ class Ks_affiliation extends Module
             && $this->uninstallTab()
             && $this->uninstallDb()
             && Configuration::deleteByName('KS_AFFILIATION_COOKIE_LIFETIME')
-            && Configuration::deleteByName('KS_AFFILIATION_COMPLETED_STATE');
+            && Configuration::deleteByName('KS_AFFILIATION_COMPLETED_STATE')
+            && Configuration::deleteByName('KS_AFFILIATION_COMPLETED_DELAY');
     }
 
     public function getContent(): string
@@ -72,10 +74,14 @@ class Ks_affiliation extends Module
                 $output .= $this->displayError($this->l('Invalid security token.'));
             } else {
                 $state = (int) Tools::getValue('KS_AFFILIATION_COMPLETED_STATE');
+                $delay = (int) Tools::getValue('KS_AFFILIATION_COMPLETED_DELAY');
                 if ($state <= 0) {
                     $output .= $this->displayError($this->l('Please select an order status.'));
+                } elseif ($delay < 0) {
+                    $output .= $this->displayError($this->l('Delay must be zero or a positive integer.'));
                 } else {
                     Configuration::updateValue('KS_AFFILIATION_COMPLETED_STATE', $state);
+                    Configuration::updateValue('KS_AFFILIATION_COMPLETED_DELAY', $delay);
                     $output .= $this->displayConfirmation($this->l('Settings saved.'));
                 }
             }
@@ -104,7 +110,7 @@ class Ks_affiliation extends Module
                     'icon'  => 'icon-cogs',
                 ],
                 'description' => sprintf(
-                    $this->l('Merchandise Returns time limit (from Customer Service): %d days. Orders that have been in the "Order completed" status for at least this many days are shown as "Completed".'),
+                    $this->l('Merchandise Returns time limit (from Customer Service): %d days. Orders that have been in the "Order completed" status for at least this many days (plus the delay below) are shown as "Completed".'),
                     $returnDays
                 ),
                 'input' => [
@@ -119,6 +125,15 @@ class Ks_affiliation extends Module
                             'id'    => 'id_option',
                             'name'  => 'name',
                         ],
+                    ],
+                    [
+                        'type'     => 'text',
+                        'label'    => $this->l('Delay'),
+                        'name'     => 'KS_AFFILIATION_COMPLETED_DELAY',
+                        'required' => false,
+                        'class'    => 'fixed-width-sm',
+                        'suffix'   => $this->l('days'),
+                        'hint'     => $this->l('Extra days to wait, on top of the Merchandise Returns time limit, before marking an affiliate order as "Completed".'),
                     ],
                 ],
                 'submit' => ['title' => $this->l('Save')],
@@ -136,6 +151,7 @@ class Ks_affiliation extends Module
         $helper->submit_action   = 'submitKsAffiliationConfig';
         $helper->fields_value    = [
             'KS_AFFILIATION_COMPLETED_STATE' => (int) Configuration::get('KS_AFFILIATION_COMPLETED_STATE'),
+            'KS_AFFILIATION_COMPLETED_DELAY' => (int) Configuration::get('KS_AFFILIATION_COMPLETED_DELAY'),
         ];
 
         return $helper->generateForm($fields_form);
@@ -165,6 +181,7 @@ class Ks_affiliation extends Module
             `id_ks_affiliation_link`  INT(11) NOT NULL,
             `id_order`                INT(11) UNSIGNED NOT NULL,
             `id_shop`                 INT(11) UNSIGNED NOT NULL,
+            `finished`                TINYINT(1) UNSIGNED NOT NULL DEFAULT 0,
             `date_add`                DATETIME NOT NULL,
             PRIMARY KEY (`id_ks_affiliation_order`),
             UNIQUE KEY `uq_order` (`id_order`),
@@ -369,15 +386,34 @@ class Ks_affiliation extends Module
 
     public function hookDisplayHeader(): string
     {
-        if (!array_key_exists(self::QUERY_PARAM, $_GET)) {
-            return '';
-        }
+        $param = json_encode(self::QUERY_PARAM);
 
-        return '<script>(function(){try{var u=new URL(window.location.href);'
-            . 'if(u.searchParams.has(' . json_encode(self::QUERY_PARAM) . ')){'
-            . 'u.searchParams.delete(' . json_encode(self::QUERY_PARAM) . ');'
+        return '<script>(function(){try{'
+            // Case 1: token in real query string — strip it from the address bar.
+            . 'var u=new URL(window.location.href);'
+            . 'if(u.searchParams.has(' . $param . ')){'
+            . 'u.searchParams.delete(' . $param . ');'
             . 'window.history.replaceState({},document.title,u.pathname+(u.search?u.search:"")+u.hash);'
-            . '}}catch(e){}}());</script>';
+            . '}'
+            // Case 2: token hidden inside the URL fragment (e.g. PS attribute-selector
+            // URLs of the form `/product.html#/1-size-s?affiliate_token=...`). Hashes
+            // never reach PHP, so ping the server with the token in the real query
+            // string to set the cookie, then clean it out of the hash in place.
+            . 'var h=window.location.hash;'
+            . 'var rx=/([?&])' . self::QUERY_PARAM . '=([^&]+)/;'
+            . 'var hm=h.match(rx);'
+            . 'if(hm){'
+            . 'var token=hm[2];'
+            . 'var sep=window.location.search?"&":"?";'
+            . 'var ping=window.location.pathname+window.location.search+sep+' . $param . '+"="+encodeURIComponent(token);'
+            . 'try{fetch(ping,{credentials:"same-origin",redirect:"manual",cache:"no-store"}).catch(function(){});}catch(e){'
+            . 'var img=new Image();img.src=ping;'
+            . '}'
+            . 'var cleaned=h.replace(rx,function(_,p){return p==="?"?"?":"";}).replace(/[?&]$/,"");'
+            . 'if(cleaned==="#"||cleaned==="#?"){cleaned="";}'
+            . 'window.history.replaceState({},document.title,window.location.pathname+window.location.search+cleaned);'
+            . '}'
+            . '}catch(e){}}());</script>';
     }
 
     public function hookDisplayBackOfficeHeader(): string
